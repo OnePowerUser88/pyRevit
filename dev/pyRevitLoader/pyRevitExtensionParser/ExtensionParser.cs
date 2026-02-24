@@ -793,6 +793,11 @@ namespace pyRevitExtensionParser
 
             foreach (var dir in dirs)
             {
+                // Skip directories whose name starts with . or _ (match Python parser behavior)
+                var dirName = Path.GetFileName(dir);
+                if (dirName.StartsWith(".", StringComparison.Ordinal) || dirName.StartsWith("_", StringComparison.Ordinal))
+                    continue;
+
                 var ext = Path.GetExtension(dir);
                 var componentType = CommandComponentTypeExtensions.FromExtension(ext);
                 if (componentType == CommandComponentType.Unknown)
@@ -848,7 +853,13 @@ namespace pyRevitExtensionParser
                     }
                 }
 
-                if (scriptPath == null &&
+                // Fallback to bundle.yaml only for leaf command types that need a script; not for containers
+                // (PullDown, Stack, SplitButton, SplitPushButton) so script path stays null when no script file exists
+                var isContainer = componentType == CommandComponentType.PullDown ||
+                    componentType == CommandComponentType.Stack ||
+                    componentType == CommandComponentType.SplitButton ||
+                    componentType == CommandComponentType.SplitPushButton;
+                if (scriptPath == null && !isContainer &&
                    (componentType == CommandComponentType.PushButton ||
                     componentType == CommandComponentType.SmartButton ||
                     componentType == CommandComponentType.PullDown ||
