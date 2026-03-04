@@ -25,6 +25,11 @@ namespace pyRevitExtensionParser
         public bool RocketModeCompatible { get; set; } = false;
 
         /// <summary>
+        /// Config option schema from extension.ini (which options this extension supports for user config).
+        /// </summary>
+        public List<ExtensionConfigOptionDefinition> ConfigSchema { get; set; }
+
+        /// <summary>
         /// Layout directives that reference external components (from other extensions or native Revit).
         /// These must be applied after the full UI is built using the Revit ribbon API.
         /// </summary>

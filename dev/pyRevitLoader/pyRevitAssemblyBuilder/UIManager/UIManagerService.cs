@@ -144,12 +144,21 @@ namespace pyRevitAssemblyBuilder.UIManager
                 _logger.Debug($"Rocket mode: skipping icon pre-load for extension '{extension.Name}'.");
 
             _currentExtension = extension;
+            var disabledTabs = extension.Config?.DisabledTabs;
             foreach (var component in extension.Children)
             {
-                if (component != null)
+                if (component == null)
+                    continue;
+                if (component.Type == CommandComponentType.Tab && disabledTabs != null && disabledTabs.Count > 0)
                 {
-                    RecursivelyBuildUI(component, null, null, extension.Name, assemblyInfo);
+                    var tabTitle = ExtensionParser.GetComponentTitle(component);
+                    if (!string.IsNullOrEmpty(tabTitle) && disabledTabs.Any(t => string.Equals(t.Trim(), tabTitle, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _logger.Debug($"Skipping tab '{tabTitle}' (disabled by extension config).");
+                        continue;
+                    }
                 }
+                RecursivelyBuildUI(component, null, null, extension.Name, assemblyInfo);
             }
             _currentExtension = null;
         }

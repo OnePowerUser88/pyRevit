@@ -1,0 +1,16 @@
+; Sample extension.ini - copy to your extension root as extension.ini
+; Declares which config options your extension supports. Values are stored in
+; %APPDATA%\pyRevit\pyRevit_config.ini under [YourExtension.extension].
+; CLI can read/write the same keys.
+
+[disabled_tabs]
+type=string_list
+label=Disabled tabs
+description=Tab names to hide (comma-separated). Reload pyRevit to apply.
+default=
+
+[run_startup]
+type=bool
+label=Run startup script
+description=Run extension startup on load.
+default=true

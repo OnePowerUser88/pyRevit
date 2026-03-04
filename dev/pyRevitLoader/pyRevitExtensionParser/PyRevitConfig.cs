@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace pyRevitExtensionParser
 {
@@ -456,6 +457,43 @@ namespace pyRevitExtensionParser
         }
 
         /// <summary>
+        /// Gets a single extension config value from pyRevit_config.ini.
+        /// </summary>
+        /// <param name="sectionName">Section name, e.g. "AVAssistent.Revit.extension"</param>
+        /// <param name="key">Config key</param>
+        /// <returns>Value or empty string if not set</returns>
+        public string GetExtensionConfigValue(string sectionName, string key)
+        {
+            if (string.IsNullOrEmpty(sectionName) || string.IsNullOrEmpty(key))
+                return string.Empty;
+            var value = _ini.IniReadValue(sectionName, key);
+            return value?.Trim() ?? string.Empty;
+        }
+
+        /// <summary>
+        /// Sets a single extension config value in pyRevit_config.ini (single value; CLI/UI use this).
+        /// </summary>
+        /// <param name="sectionName">Section name, e.g. "AVAssistent.Revit.extension"</param>
+        /// <param name="key">Config key</param>
+        /// <param name="value">Value to write</param>
+        public void SetExtensionConfigValue(string sectionName, string key, string value)
+        {
+            if (string.IsNullOrEmpty(sectionName) || string.IsNullOrEmpty(key))
+                return;
+            _ini.IniWriteValue(sectionName, key, value ?? string.Empty);
+        }
+
+        private static List<string> ParseCommaSeparatedList(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return new List<string>();
+            return value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .ToList();
+        }
+
+        /// <summary>
         /// Retrieves the configuration for a specific extension by its name.
         /// </summary>
         /// <param name="extensionName">
@@ -486,12 +524,18 @@ namespace pyRevitExtensionParser
         /// </example>
         public ExtensionConfig ParseExtensionByName(string extensionName)
         {
-            // Try both possible section names directly
-            var possibleSections = new[]
+            // Try section names: derived names and exact folder name (Python UI writes [AVAssistent.Revit.extension]).
+            var possibleSections = new List<string>
             {
                 $"{extensionName}.extension",
                 $"{extensionName}.lib"
             };
+            if (!string.IsNullOrEmpty(extensionName) &&
+                (extensionName.EndsWith(".extension", StringComparison.OrdinalIgnoreCase) ||
+                 extensionName.EndsWith(".lib", StringComparison.OrdinalIgnoreCase)))
+            {
+                possibleSections.Insert(0, extensionName);
+            }
 
             foreach (var section in possibleSections)
             {
@@ -499,23 +543,26 @@ namespace pyRevitExtensionParser
                 var disabledValue = _ini.IniReadValue(section, "disabled");
                 var privateRepoValue = _ini.IniReadValue(section, "private_repo");
                 var usernameValue = _ini.IniReadValue(section, "username");
-                
+                var disabledTabsValue = _ini.IniReadValue(section, "disabled_tabs");
+
                 // Check if section exists by verifying any key has a value
-                if (!string.IsNullOrEmpty(disabledValue) || 
+                if (!string.IsNullOrEmpty(disabledValue) ||
                     !string.IsNullOrEmpty(privateRepoValue) ||
-                    !string.IsNullOrEmpty(usernameValue))
+                    !string.IsNullOrEmpty(usernameValue) ||
+                    !string.IsNullOrEmpty(disabledTabsValue))
                 {
                     // Section exists, parse all values
-                    // Read password only if section exists (one less P/Invoke call for non-existent sections)
                     var passwordValue = _ini.IniReadValue(section, "password");
-                    
+                    var disabledTabs = ParseCommaSeparatedList(disabledTabsValue);
+
                     return new ExtensionConfig
                     {
                         Name = extensionName,
                         Disabled = bool.TryParse(disabledValue, out var disabled) && disabled,
                         PrivateRepo = bool.TryParse(privateRepoValue, out var privateRepo) && privateRepo,
                         Username = usernameValue,
-                        Password = passwordValue
+                        Password = passwordValue,
+                        DisabledTabs = disabledTabs
                     };
                 }
             }
@@ -573,6 +620,11 @@ namespace pyRevitExtensionParser
         /// May be null or empty for public repositories.
         /// </remarks>
         public string Password { get; set; }
+
+        /// <summary>
+        /// Tab display names to hide for this extension (single value in INI: comma-separated).
+        /// </summary>
+        public List<string> DisabledTabs { get; set; }
     }
 
     /// <summary>
@@ -708,5 +760,31 @@ namespace pyRevitExtensionParser
         /// <para>This combines both generic and Dynamo-specific threading requirements.</para>
         /// </remarks>
         public bool RequiresMainThread => (MainThread ?? false) || (Automate ?? false);
+    }
+
+    /// <summary>
+    /// Type of a single extension config option (single value stored as string in INI).
+    /// </summary>
+    public enum ExtensionConfigOptionType
+    {
+        String,
+        Bool,
+        StringList,
+        Choice
+    }
+
+    /// <summary>
+    /// Definition of one config option declared in an extension's extension.ini.
+    /// Used by the config UI and CLI to show/edit values; actual storage is in pyRevit_config.ini.
+    /// </summary>
+    public class ExtensionConfigOptionDefinition
+    {
+        public string Key { get; set; }
+        public ExtensionConfigOptionType Type { get; set; }
+        public string Label { get; set; }
+        public string Description { get; set; }
+        public string Default { get; set; }
+        /// <summary>For Choice type: comma-separated options.</summary>
+        public List<string> Options { get; set; }
     }
 }

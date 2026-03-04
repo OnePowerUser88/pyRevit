@@ -1,0 +1,11 @@
+title:
+  en_us: Extension Config
+  fr_fr: Config extension
+  de_de: Erweiterungs-Konfiguration
+  pt_br: Config extensão
+tooltip:
+  en_us: Configure options for extensions that support extension.ini (e.g. disabled tabs). Reload pyRevit to apply.
+  de_de: Optionen für Erweiterungen mit extension.ini (z.B. deaktivierte Tabs). PyRevit neu laden zum Übernehmen.
+context: zero-doc
+engine:
+  clean: true

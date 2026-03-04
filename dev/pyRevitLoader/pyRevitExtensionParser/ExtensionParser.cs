@@ -55,6 +55,9 @@ namespace pyRevitExtensionParser
                 logger.Error(message);
         }
 
+        /// <summary>Filename for extension config manifest in extension root (declares which config options the extension supports).</summary>
+        public const string ExtensionIniFileName = "extension.ini";
+
         private static void LogParseException(string parsedFile, Exception ex)
         {
             if (ex == null)
@@ -393,6 +396,151 @@ namespace pyRevitExtensionParser
         }
 
         /// <summary>
+        /// Normalizes a string for tab-name matching: removes all whitespace so "AV Beta" matches "AVBeta".
+        /// </summary>
+        private static string NormalizeForMatch(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+                return s;
+            return new string(s.Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+        }
+
+        /// <summary>
+        /// Reads extension.ini in the extension root and returns the default value for [disabled_tabs] as a list.
+        /// Used as fallback so tabs are filtered even if config/schema path didn't populate DisabledTabs.
+        /// </summary>
+        private static List<string> ReadDisabledTabsDefaultFromExtensionIni(string extDir)
+        {
+            if (string.IsNullOrEmpty(extDir) || !Directory.Exists(extDir))
+                return null;
+            var path = Path.Combine(extDir, ExtensionIniFileName);
+            if (!FileExists(path))
+                return null;
+            try
+            {
+                var lines = File.ReadAllLines(path);
+                string currentSection = null;
+                foreach (var line in lines)
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.StartsWith("[") && trimmed.EndsWith("]"))
+                    {
+                        currentSection = trimmed.Substring(1, trimmed.Length - 2).Trim();
+                        continue;
+                    }
+                    if (string.Equals(currentSection, "disabled_tabs", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var eq = trimmed.IndexOf('=');
+                        if (eq > 0 && string.Equals(trimmed.Substring(0, eq).Trim(), "default", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var value = trimmed.Substring(eq + 1).Trim();
+                            if (string.IsNullOrEmpty(value))
+                                return null;
+                            return value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                                .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogParseException(path, ex);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Parses extension.ini in the extension root and returns the config option schema.
+        /// Each [section] is one config key; keys type, label, description, default, options (for choice) define the option.
+        /// </summary>
+        public static List<ExtensionConfigOptionDefinition> ParseExtensionIni(string extDir)
+        {
+            var result = new List<ExtensionConfigOptionDefinition>();
+            if (string.IsNullOrEmpty(extDir) || !Directory.Exists(extDir))
+                return result;
+
+            var path = Path.Combine(extDir, ExtensionIniFileName);
+            if (!FileExists(path))
+                return result;
+
+            try
+            {
+                var lines = File.ReadAllLines(path);
+                string currentSection = null;
+                var currentKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+                void FlushSection()
+                {
+                    if (string.IsNullOrEmpty(currentSection))
+                        return;
+                    var typeStr = currentKeys.TryGetValue("type", out var t) ? t?.Trim() : null;
+                    if (string.IsNullOrEmpty(typeStr))
+                        typeStr = "string";
+                    var type = ParseConfigOptionType(typeStr);
+                    var options = new List<string>();
+                    if (type == ExtensionConfigOptionType.Choice && currentKeys.TryGetValue("options", out var optStr) && !string.IsNullOrEmpty(optStr))
+                    {
+                        options = optStr.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+                    }
+                    result.Add(new ExtensionConfigOptionDefinition
+                    {
+                        Key = currentSection,
+                        Type = type,
+                        Label = currentKeys.TryGetValue("label", out var l) ? l?.Trim() : currentSection,
+                        Description = currentKeys.TryGetValue("description", out var d) ? d?.Trim() : null,
+                        Default = currentKeys.TryGetValue("default", out var def) ? def?.Trim() : null,
+                        Options = options
+                    });
+                }
+
+                foreach (var line in lines)
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.Length == 0 || trimmed.StartsWith(";") || trimmed.StartsWith("#"))
+                        continue;
+
+                    if (trimmed.StartsWith("[") && trimmed.EndsWith("]"))
+                    {
+                        FlushSection();
+                        currentSection = trimmed.Substring(1, trimmed.Length - 2).Trim();
+                        currentKeys.Clear();
+                        continue;
+                    }
+
+                    var eq = trimmed.IndexOf('=');
+                    if (eq > 0 && !string.IsNullOrEmpty(currentSection))
+                    {
+                        var key = trimmed.Substring(0, eq).Trim();
+                        var value = trimmed.Substring(eq + 1).Trim();
+                        currentKeys[key] = value;
+                    }
+                }
+
+                FlushSection();
+            }
+            catch (Exception ex)
+            {
+                LogParseException(path, ex);
+            }
+
+            return result;
+        }
+
+        private static ExtensionConfigOptionType ParseConfigOptionType(string typeStr)
+        {
+            if (string.IsNullOrEmpty(typeStr))
+                return ExtensionConfigOptionType.String;
+            switch (typeStr.ToLowerInvariant())
+            {
+                case "bool": case "boolean": return ExtensionConfigOptionType.Bool;
+                case "string_list": case "stringlist": return ExtensionConfigOptionType.StringList;
+                case "choice": return ExtensionConfigOptionType.Choice;
+                default: return ExtensionConfigOptionType.String;
+            }
+        }
+
+        /// <summary>
         /// Parses a single extension from the given extension directory path
         /// </summary>
         /// <param name="extDir">The path to the .extension directory</param>
@@ -489,6 +637,74 @@ namespace pyRevitExtensionParser
             var config = GetConfig();
             var extConfig = config.ParseExtensionByName(extName);
 
+            var configSchema = ParseExtensionIni(extDir);
+
+            // Build default disabled_tabs from extension.ini.
+            List<string> defaultTabs = null;
+            var disabledTabsOption = configSchema?.FirstOrDefault(o => string.Equals(o.Key, "disabled_tabs", StringComparison.OrdinalIgnoreCase));
+            if (disabledTabsOption != null && !string.IsNullOrWhiteSpace(disabledTabsOption.Default))
+            {
+                defaultTabs = disabledTabsOption.Default.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+            }
+            if ((defaultTabs == null || defaultTabs.Count == 0) && !string.IsNullOrEmpty(extDir) && Directory.Exists(extDir))
+            {
+                defaultTabs = ReadDisabledTabsDefaultFromExtensionIni(extDir);
+            }
+
+            // Apply defaults to extConfig for persistence/UI; user settings fully override the default list.
+            if (defaultTabs != null && defaultTabs.Count > 0)
+            {
+                if (extConfig == null)
+                {
+                    extConfig = new ExtensionConfig { Name = extName, DisabledTabs = new List<string>(defaultTabs) };
+                }
+                else if (extConfig.DisabledTabs == null || extConfig.DisabledTabs.Count == 0)
+                {
+                    extConfig.DisabledTabs = new List<string>(defaultTabs);
+                }
+            }
+
+            // Final list: if user has configured disabled_tabs, use that; otherwise fall back to extension.ini default.
+            List<string> disabledTabsList = null;
+            var userTabs = extConfig?.DisabledTabs;
+            if (userTabs != null && userTabs.Count > 0)
+            {
+                disabledTabsList = userTabs
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+            else if (defaultTabs != null && defaultTabs.Count > 0)
+            {
+                disabledTabsList = defaultTabs;
+            }
+            if (disabledTabsList != null && disabledTabsList.Count > 0 && children != null)
+            {
+                var disabledSet = new HashSet<string>(disabledTabsList.Select(t => t.Trim()), StringComparer.OrdinalIgnoreCase);
+                var disabledSetNormalized = new HashSet<string>(
+                    disabledTabsList.Select(t => NormalizeForMatch(t.Trim())),
+                    StringComparer.OrdinalIgnoreCase);
+                for (var i = children.Count - 1; i >= 0; i--)
+                {
+                    var c = children[i];
+                    if (c?.Type == CommandComponentType.Tab)
+                    {
+                        var tabTitle = GetComponentTitle(c);
+                        var displayName = c.DisplayName ?? string.Empty;
+                        var name = c.Name ?? string.Empty;
+                        bool match = (!string.IsNullOrEmpty(tabTitle) && (disabledSet.Contains(tabTitle) || disabledSetNormalized.Contains(NormalizeForMatch(tabTitle)))) ||
+                            (!string.IsNullOrEmpty(displayName) && (disabledSet.Contains(displayName) || disabledSetNormalized.Contains(NormalizeForMatch(displayName)))) ||
+                            (!string.IsNullOrEmpty(name) && (disabledSet.Contains(name) || disabledSetNormalized.Contains(NormalizeForMatch(name))));
+                        if (match)
+                        {
+                            children.RemoveAt(i);
+                        }
+                    }
+                }
+            }
+
             var parsedExtension = new ParsedExtension
             {
                 Name = extName,
@@ -504,7 +720,8 @@ namespace pyRevitExtensionParser
                 Context = parsedBundle?.GetFormattedContext(),
                 Engine = parsedBundle?.Engine,
                 Config = extConfig,
-                RocketModeCompatible = rocketModeCompatible
+                RocketModeCompatible = rocketModeCompatible,
+                ConfigSchema = configSchema
             };
 
             ReorderByLayout(parsedExtension, parsedExtension, null);
