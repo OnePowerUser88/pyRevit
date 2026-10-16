@@ -221,6 +221,13 @@ def perform_postload():
     try:
         timeout = user_config.startuplog_timeout
         session_output = runtime_types.ScriptOutput.GetDefault()
+        # WebView2 buffers prints until DocumentReady; drain before
+        # self_destruct or the session window stays blank.
+        try:
+            if session_output.IsWindowReady and session_output.window.IsVisible:
+                session_output.get_head_html()
+        except Exception:
+            pass
         if (
             timeout > 0
             and not logger.loggers_have_errors()

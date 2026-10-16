@@ -184,6 +184,15 @@ namespace PyRevitLabs.PyRevit.Runtime {
             // runtime and its window references are torn down below.
             try {
                 runtime.OutputStream.Flush();
+                // WebView2: Flush() only moves stream entries into the console
+                // buffer. Force Chromium to paint before Dispose or short scripts
+                // leave a blank window.
+                var outputService = runtime.OutputService;
+                if (outputService != null && outputService.IsWindowReady
+                        && outputService.window != null
+                        && outputService.window.IsVisible) {
+                    outputService.get_head_html();
+                }
             }
             catch {
                 // output rendering must never break command teardown
